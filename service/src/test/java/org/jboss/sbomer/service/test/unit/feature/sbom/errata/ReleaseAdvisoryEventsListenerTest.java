@@ -47,6 +47,7 @@ import org.jboss.sbomer.core.features.sbom.enums.RequestEventStatus;
 import org.jboss.sbomer.core.features.sbom.utils.ObjectMapperProvider;
 import org.jboss.sbomer.core.features.sbom.utils.SbomUtils;
 import org.jboss.sbomer.core.test.TestResources;
+import org.jboss.sbomer.service.feature.sbom.atlas.AtlasHandler;
 import org.jboss.sbomer.service.feature.sbom.errata.ErrataClient;
 import org.jboss.sbomer.service.feature.sbom.errata.dto.Errata;
 import org.jboss.sbomer.service.feature.sbom.errata.dto.ErrataBuildList;
@@ -99,6 +100,7 @@ class ReleaseAdvisoryEventsListenerTest {
     final SbomService sbomService = mock(SbomService.class);
     final SbomGenerationRequestRepository generationRequestRepository = mock(SbomGenerationRequestRepository.class);
     final RequestEventRepository requestEventRepository = mock(RequestEventRepository.class);
+    final AtlasHandler atlasHandler = mock(AtlasHandler.class);
 
     private static void printRawBom(Bom bom) {
         try {
@@ -684,6 +686,7 @@ class ReleaseAdvisoryEventsListenerTest {
         listenerTextOnlyManifests.setSbomService(sbomService);
         listenerTextOnlyManifests.setGenerationRequestRepository(generationRequestRepository);
         listenerTextOnlyManifests.setRequestEventRepository(requestEventRepository);
+        listenerTextOnlyManifests.setAtlasHandler(atlasHandler);
 
         String productVersionText = "Red Hat build of Quarkus 2.13.9.SP2";
         Errata errata = loadErrata("textOnly/manifests/errata.json");
@@ -733,6 +736,7 @@ class ReleaseAdvisoryEventsListenerTest {
         listenerTextOnlyDeliverables.setSbomService(sbomService);
         listenerTextOnlyDeliverables.setGenerationRequestRepository(generationRequestRepository);
         listenerTextOnlyDeliverables.setRequestEventRepository(requestEventRepository);
+        listenerTextOnlyDeliverables.setAtlasHandler(atlasHandler);
 
         String productVersionText = "Red Hat build of Quarkus 3.2.11";
         Errata errata = loadErrata("textOnly/deliverables/errata.json");
@@ -792,6 +796,7 @@ class ReleaseAdvisoryEventsListenerTest {
         listenerSingleContainer.setSbomService(sbomService);
         listenerSingleContainer.setGenerationRequestRepository(generationRequestRepository);
         listenerSingleContainer.setRequestEventRepository(requestEventRepository);
+        listenerSingleContainer.setAtlasHandler(atlasHandler);
 
         // Get all objects required
         Errata errata = loadErrata("singleContainer/errata_143793.json");
@@ -875,6 +880,7 @@ class ReleaseAdvisoryEventsListenerTest {
         listenerMultiContainers.setSbomService(sbomService);
         listenerMultiContainers.setGenerationRequestRepository(generationRequestRepository);
         listenerMultiContainers.setRequestEventRepository(requestEventRepository);
+        listenerMultiContainers.setAtlasHandler(atlasHandler);
 
         // Get all objects required
         //
@@ -1021,6 +1027,7 @@ class ReleaseAdvisoryEventsListenerTest {
         listenerSingleRpm.setSbomService(sbomService);
         listenerSingleRpm.setGenerationRequestRepository(generationRequestRepository);
         listenerSingleRpm.setRequestEventRepository(requestEventRepository);
+        listenerSingleRpm.setAtlasHandler(atlasHandler);
 
         // Get all objects required
         Errata errata = loadErrata("singleRpm/errata_89769.json");

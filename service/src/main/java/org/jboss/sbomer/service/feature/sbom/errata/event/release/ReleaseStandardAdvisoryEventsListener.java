@@ -47,7 +47,6 @@ import org.jboss.sbomer.core.features.sbom.enums.GenerationResult;
 import org.jboss.sbomer.core.features.sbom.enums.RequestEventStatus;
 import org.jboss.sbomer.core.features.sbom.utils.ObjectMapperProvider;
 import org.jboss.sbomer.core.features.sbom.utils.SbomUtils;
-import org.jboss.sbomer.service.feature.sbom.errata.ErrataClient;
 import org.jboss.sbomer.service.feature.sbom.errata.dto.Errata;
 import org.jboss.sbomer.service.feature.sbom.errata.dto.ErrataBuildList;
 import org.jboss.sbomer.service.feature.sbom.errata.dto.ErrataBuildList.BuildItem;
@@ -62,10 +61,6 @@ import org.jboss.sbomer.service.feature.sbom.pyxis.PyxisClient;
 import org.jboss.sbomer.service.feature.sbom.pyxis.dto.PyxisRepository;
 import org.jboss.sbomer.service.feature.sbom.pyxis.dto.PyxisRepositoryDetails;
 import org.jboss.sbomer.service.feature.sbom.pyxis.dto.RepositoryCoordinates;
-import org.jboss.sbomer.service.feature.sbom.service.RequestEventRepository;
-import org.jboss.sbomer.service.feature.sbom.service.SbomGenerationRequestRepository;
-import org.jboss.sbomer.service.feature.sbom.service.SbomService;
-import org.jboss.sbomer.service.stats.StatsService;
 
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
@@ -76,38 +71,17 @@ import io.quarkus.narayana.jta.QuarkusTransaction;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.event.ObservesAsync;
 import jakarta.inject.Inject;
-import jakarta.transaction.Transactional;
-import jakarta.transaction.Transactional.TxType;
 import lombok.Setter;
 import lombok.extern.slf4j.Slf4j;
 
-@Setter
 @ApplicationScoped
 @Slf4j
-public class ReleaseStandardAdvisoryEventsListener {
-
-    // Set the long transaction timeout to 10 minutes
-    private static final int INCREASED_TIMEOUT_SEC = 600;
+public class ReleaseStandardAdvisoryEventsListener extends AbstractEventsListener {
 
     @Inject
     @RestClient
-    ErrataClient errataClient;
-
-    @Inject
-    @RestClient
+    @Setter
     PyxisClient pyxisClient;
-
-    @Inject
-    SbomService sbomService;
-
-    @Inject
-    StatsService statsService;
-
-    @Inject
-    SbomGenerationRequestRepository generationRequestRepository;
-
-    @Inject
-    RequestEventRepository requestEventRepository;
 
     private static final String NVR_STANDARD_SEPARATOR = "-";
 
@@ -174,27 +148,14 @@ public class ReleaseStandardAdvisoryEventsListener {
                     "An error occurred during the creation of release manifests for event '{}'",
                     requestEvent.getId(),
                     e);
-            markRequestFailed(requestEvent, event.getReleaseGenerations().values());
+            markRequestFailed(
+                    requestEvent,
+                    event.getReleaseGenerations().values(),
+                    "An error occurred during the creation of the release manifest");
         }
 
         // Let's trigger the update of statuses and advisory comments
         doUpdateGenerationsStatus(event.getReleaseGenerations().values());
-    }
-
-    @Transactional(value = TxType.REQUIRES_NEW)
-    protected void markRequestFailed(RequestEvent requestEvent, Collection<SbomGenerationRequest> releaseGenerations) {
-        String reason = "An error occurred during the creation of the release manifest";
-        log.error(reason);
-
-        requestEvent = requestEventRepository.findById(requestEvent.getId());
-        requestEvent.setEventStatus(RequestEventStatus.FAILED);
-        requestEvent.setReason(reason);
-
-        for (SbomGenerationRequest generation : releaseGenerations) {
-            generation = generationRequestRepository.findById(generation.getId());
-            generation.setStatus(SbomGenerationStatus.FAILED);
-            generation.setReason(reason);
-        }
     }
 
     protected void releaseManifestsForRPMBuilds(
@@ -254,18 +215,9 @@ public class ReleaseStandardAdvisoryEventsListener {
                     releaseGeneration.getId(),
                     productVersion.getName(),
                     erratum.getDetails().get().getFulladvisory());
-        });
-    }
 
-    @Transactional
-    protected void doUpdateGenerationsStatus(Collection<SbomGenerationRequest> releaseGenerations) {
-        // Update only one SbomGenerationRequest, because the requestEvent associated is the same for all of them. This
-        // avoids duplicated comments in the advisory
-        if (releaseGenerations != null && !releaseGenerations.isEmpty()) {
-            SbomGenerationRequest generation = releaseGenerations.iterator().next();
-            generation = generationRequestRepository.findById(generation.getId());
-            SbomGenerationRequest.updateRequestEventStatus(generation);
-        }
+            performPost(sbom);
+        });
     }
 
     protected void releaseManifestsForDockerBuilds(
@@ -324,6 +276,8 @@ public class ReleaseStandardAdvisoryEventsListener {
                     releaseGeneration.getId(),
                     productVersion.getName(),
                     erratum.getDetails().get().getFulladvisory());
+
+            performPost(sbom);
         });
     }
 
@@ -780,15 +734,6 @@ public class ReleaseStandardAdvisoryEventsListener {
         return pyxisClient.getRepository(registry, repository, PyxisClient.REPOSITORIES_REGISTRY_INCLUDES);
     }
 
-    public static final String REQUEST_ID = "request_id";
-    public static final String ERRATA = "errata_fullname";
-    public static final String ERRATA_ID = "errata_id";
-    public static final String ERRATA_SHIP_DATE = "errata_ship_date";
-    public static final String PRODUCT = "product_name";
-    public static final String PRODUCT_SHORTNAME = "product_shortname";
-    public static final String PRODUCT_VERSION = "product_version";
-    public static final String PURL_LIST = "purl_list";
-
     protected ObjectNode collectReleaseInfo(
             String requestEventId,
             Errata erratum,
@@ -855,28 +800,6 @@ public class ReleaseStandardAdvisoryEventsListener {
                         () -> new ApplicationException(
                                 "Image index manifest not found for generation '{}'",
                                 generation.identifier()));
-    }
-
-    private Metadata createMetadata(
-            String name,
-            String version,
-            Component.Type type,
-            Set<String> cpes,
-            Date shipDate,
-            String toolVersion) {
-        Metadata metadata = new Metadata();
-
-        Component metadataProductComponent = SbomUtils.createComponent(null, name, version, null, null, type);
-        metadataProductComponent.setBomRef(version);
-        SbomUtils.setSupplier(metadataProductComponent);
-        SbomUtils.setEvidenceIdentities(metadataProductComponent, cpes, Field.CPE);
-
-        metadata.setComponent(metadataProductComponent);
-        if (shipDate != null) {
-            metadata.setTimestamp(shipDate);
-        }
-        metadata.setToolChoice(SbomUtils.createToolInformation(toolVersion));
-        return metadata;
     }
 
     private String getGenerationNVRFromManifest(V1Beta1RequestManifestRecord manifestRecord) {
