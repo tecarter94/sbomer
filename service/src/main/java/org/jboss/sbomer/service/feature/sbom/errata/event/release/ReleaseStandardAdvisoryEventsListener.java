@@ -17,10 +17,6 @@
  */
 package org.jboss.sbomer.service.feature.sbom.errata.event.release;
 
-import static org.jboss.sbomer.core.features.sbom.utils.SbomUtils.addMissingMetadataSupplier;
-import static org.jboss.sbomer.core.features.sbom.utils.SbomUtils.addMissingSerialNumber;
-import static org.jboss.sbomer.core.features.sbom.utils.SbomUtils.addPropertyIfMissing;
-
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Comparator;
@@ -206,13 +202,13 @@ public class ReleaseStandardAdvisoryEventsListener extends AbstractEventsListene
             }
 
             // Add the AdvisoryId property
-            addPropertyIfMissing(
+            SbomUtils.addPropertyIfMissing(
                     productVersionBom.getMetadata(),
                     Constants.CONTAINER_PROPERTY_ADVISORY_ID,
                     String.valueOf(erratum.getDetails().get().getId()));
 
-            addMissingMetadataSupplier(productVersionBom);
-            addMissingSerialNumber(productVersionBom);
+            SbomUtils.addMissingMetadataSupplier(productVersionBom);
+            SbomUtils.addMissingSerialNumber(productVersionBom);
 
             SbomGenerationRequest releaseGeneration = releaseGenerations.get(productVersion.getName());
             Sbom sbom = saveReleaseManifestForRPMGeneration(
@@ -278,13 +274,13 @@ public class ReleaseStandardAdvisoryEventsListener extends AbstractEventsListene
             }
 
             // Add the AdvisoryId property
-            addPropertyIfMissing(
+            SbomUtils.addPropertyIfMissing(
                     productVersionBom.getMetadata(),
                     Constants.CONTAINER_PROPERTY_ADVISORY_ID,
                     String.valueOf(erratum.getDetails().get().getId()));
 
-            addMissingMetadataSupplier(productVersionBom);
-            addMissingSerialNumber(productVersionBom);
+            SbomUtils.addMissingMetadataSupplier(productVersionBom);
+            SbomUtils.addMissingSerialNumber(productVersionBom);
 
             SbomGenerationRequest releaseGeneration = releaseGenerations.get(productVersion.getName());
             Sbom sbom = saveReleaseManifestForDockerGeneration(
@@ -485,7 +481,7 @@ public class ReleaseStandardAdvisoryEventsListener extends AbstractEventsListene
                     SbomUtils.addMissingMetadataSupplier(manifestBom);
 
                     // Add the AdvisoryId property
-                    addPropertyIfMissing(
+                    SbomUtils.addPropertyIfMissing(
                             manifestBom.getMetadata(),
                             Constants.CONTAINER_PROPERTY_ADVISORY_ID,
                             String.valueOf(erratum.getDetails().get().getId()));
@@ -609,7 +605,7 @@ public class ReleaseStandardAdvisoryEventsListener extends AbstractEventsListene
                     buildManifest.setRootPurl(rebuiltPurl);
                     log.debug("Updated manifest '{}' to rootPurl '{}'", buildManifestRecord.id(), rebuiltPurl);
 
-                    addPropertyIfMissing(
+                    SbomUtils.addPropertyIfMissing(
                             manifestBom.getMetadata(),
                             Constants.CONTAINER_PROPERTY_ADVISORY_ID,
                             String.valueOf(erratum.getDetails().get().getId()));
