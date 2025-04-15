@@ -17,6 +17,12 @@
  */
 package org.jboss.sbomer.cli.feature.sbom.command.catalog;
 
+import static org.jboss.sbomer.core.features.sbom.Constants.CONTAINER_PROPERTY_IMAGE_LABEL_ARCHITECTURE;
+import static org.jboss.sbomer.core.features.sbom.Constants.CONTAINER_PROPERTY_IMAGE_LABEL_COMPONENT;
+import static org.jboss.sbomer.core.features.sbom.Constants.CONTAINER_PROPERTY_IMAGE_LABEL_NAME;
+import static org.jboss.sbomer.core.features.sbom.Constants.CONTAINER_PROPERTY_IMAGE_LABEL_RELEASE;
+import static org.jboss.sbomer.core.features.sbom.Constants.CONTAINER_PROPERTY_IMAGE_LABEL_VERSION;
+
 import java.time.Instant;
 import java.util.Date;
 import java.util.List;
@@ -97,16 +103,17 @@ public class SyftImageCatalogCommand extends AbstractCatalogCommand {
         SbomUtils.setSupplier(mainComponent);
         SbomUtils.addMissingMetadataSupplier(indexBom);
         SbomUtils.addMissingSerialNumber(indexBom);
+        SbomUtils.addMissingContainerHash(indexBom);
 
         return indexBom;
     }
 
     private void copyProperties(Component destination, Component origin) {
         List<String> propertyNames = List.of(
-                "sbomer:image:labels:com.redhat.component",
-                "sbomer:image:labels:name",
-                "sbomer:image:labels:release",
-                "sbomer:image:labels:version");
+                CONTAINER_PROPERTY_IMAGE_LABEL_COMPONENT,
+                CONTAINER_PROPERTY_IMAGE_LABEL_NAME,
+                CONTAINER_PROPERTY_IMAGE_LABEL_RELEASE,
+                CONTAINER_PROPERTY_IMAGE_LABEL_VERSION);
 
         propertyNames.forEach(
                 propertyName -> SbomUtils.findPropertyWithNameInComponent(propertyName, origin)
@@ -122,6 +129,13 @@ public class SyftImageCatalogCommand extends AbstractCatalogCommand {
 
         SbomUtils.setPublisher(variant);
         SbomUtils.setSupplier(variant);
+
+        // Copy hashes from main component to variant, or compute it if not available
+        if (mainComponent.getHashes() != null && !mainComponent.getHashes().isEmpty()) {
+            variant.setHashes(mainComponent.getHashes());
+        } else {
+            SbomUtils.addMissingContainerHash(variant);
+        }
 
         return variant;
     }
@@ -151,7 +165,7 @@ public class SyftImageCatalogCommand extends AbstractCatalogCommand {
             log.warn("Could not parse the PURL: {}", component.getPurl(), e);
         }
 
-        return SbomUtils.findPropertyWithNameInComponent("sbomer:image:labels:architecture", component)
+        return SbomUtils.findPropertyWithNameInComponent(CONTAINER_PROPERTY_IMAGE_LABEL_ARCHITECTURE, component)
                 .map(Property::getValue)
                 .orElseThrow(
                         () -> new ApplicationException(
@@ -159,7 +173,7 @@ public class SyftImageCatalogCommand extends AbstractCatalogCommand {
     }
 
     private String getBaseBomRefPrefix(Component component) {
-        return SbomUtils.findPropertyWithNameInComponent("sbomer:image:labels:com.redhat.component", component)
+        return SbomUtils.findPropertyWithNameInComponent(CONTAINER_PROPERTY_IMAGE_LABEL_COMPONENT, component)
                 .map(Property::getValue)
                 .orElse(component.getName());
     }

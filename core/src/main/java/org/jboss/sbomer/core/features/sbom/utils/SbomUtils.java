@@ -18,6 +18,7 @@
 package org.jboss.sbomer.core.features.sbom.utils;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
+import static org.jboss.sbomer.core.features.sbom.Constants.MRRC_URL;
 import static org.jboss.sbomer.core.features.sbom.Constants.PROPERTY_ERRATA_PRODUCT_NAME;
 import static org.jboss.sbomer.core.features.sbom.Constants.PROPERTY_ERRATA_PRODUCT_VARIANT;
 import static org.jboss.sbomer.core.features.sbom.Constants.PROPERTY_ERRATA_PRODUCT_VERSION;
@@ -31,14 +32,19 @@ import static org.jboss.sbomer.core.features.sbom.Constants.SBOM_RED_HAT_ENVIRON
 import static org.jboss.sbomer.core.features.sbom.Constants.SBOM_RED_HAT_PNC_ARTIFACT_ID;
 import static org.jboss.sbomer.core.features.sbom.Constants.SBOM_RED_HAT_PNC_BUILD_ID;
 import static org.jboss.sbomer.core.features.sbom.Constants.SBOM_RED_HAT_PNC_OPERATION_ID;
+import static org.jboss.sbomer.core.features.sbom.Constants.SUPPLIER_NAME;
+import static org.jboss.sbomer.core.features.sbom.Constants.SUPPLIER_URL;
 
 import java.io.IOException;
+import java.net.URI;
+import java.net.URISyntaxException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.Date;
 import java.util.List;
 import java.util.Map;
@@ -80,10 +86,14 @@ import org.cyclonedx.model.Property;
 import org.cyclonedx.model.Tool;
 import org.cyclonedx.model.metadata.ToolInformation;
 import org.cyclonedx.parsers.JsonParser;
+import org.jboss.pnc.api.deliverablesanalyzer.dto.LicenseInfo;
+import org.jboss.pnc.api.enums.LicenseSource;
+import org.jboss.pnc.build.finder.core.SpdxLicenseUtils;
 import org.jboss.pnc.common.Strings;
 import org.jboss.pnc.dto.Artifact;
 import org.jboss.pnc.dto.Build;
 import org.jboss.pnc.dto.DeliverableAnalyzerOperation;
+import org.jboss.pnc.dto.response.AnalyzedArtifact;
 import org.jboss.pnc.restclient.util.ArtifactUtil;
 import org.jboss.sbomer.core.features.sbom.Constants;
 import org.jboss.sbomer.core.features.sbom.config.Config;
@@ -325,8 +335,110 @@ public class SbomUtils {
                                 }));
     }
 
-    public static Component createComponent(Artifact artifact, Scope scope, Type type) {
+    public static Optional<URI> getNormalizedUrl(String url) {
+        if (Strings.isEmpty(url)) {
+            return Optional.empty();
+        }
 
+        try {
+            return Optional.of(new URI(url).normalize());
+        } catch (URISyntaxException e) {
+            log.error("Failed to normalize URL '{}': {}", url, e.getMessage(), e);
+            return Optional.empty();
+        }
+    }
+
+    public static String licenseSourceToDescription(LicenseSource source) {
+        return switch (source) {
+            case UNKNOWN -> "unknown";
+            case POM -> ".pom file of artifact";
+            case POM_XML -> "pom.xml file inside artifact";
+            case BUNDLE_LICENSE -> "Bundle-License header inside MANIFEST.MF of artifact";
+            case TEXT -> "license text file inside artifact";
+        };
+    }
+
+    private static void addLicenseEvidence(Component component, List<LicenseInfo> licenseInfos) {
+        if (licenseInfos.isEmpty()) {
+            return;
+        }
+
+        Evidence evidence = new Evidence();
+        LicenseChoice licenseChoice = new LicenseChoice();
+        licenseChoice.setLicenses(licenseInfos.stream().map(licenseInfo -> {
+            License license = new License();
+            license.setId(licenseInfo.getSpdxLicenseId());
+            license.setAcknowledgement("declared");
+            List<Property> properties = new ArrayList<>();
+            Property sourceProperty = new Property();
+            sourceProperty.setName("source");
+            sourceProperty.setValue(licenseInfo.getSource().toString());
+            properties.add(sourceProperty);
+            Property sourceDescriptionProperty = new Property();
+            sourceDescriptionProperty.setName("source-description");
+            sourceDescriptionProperty.setValue(licenseSourceToDescription(licenseInfo.getSource()));
+            properties.add(sourceDescriptionProperty);
+            String url = licenseInfo.getUrl();
+            Optional<URI> optionalURI = getNormalizedUrl(url);
+
+            if (optionalURI.isPresent()) {
+                URI uri = optionalURI.get();
+                String normalizedUri = uri.toASCIIString();
+
+                if (uri.isAbsolute()) {
+                    license.setUrl(normalizedUri);
+                } else {
+                    Property relativeUrlProperty = new Property();
+                    relativeUrlProperty.setName("relative-url");
+                    relativeUrlProperty.setValue(normalizedUri);
+                    properties.add(relativeUrlProperty);
+                }
+            }
+
+            license.setProperties(properties);
+            return license;
+        }).toList());
+        evidence.setLicenses(licenseChoice);
+        component.setEvidence(evidence);
+    }
+
+    public static Component createComponent(AnalyzedArtifact analyzedArtifact, Scope scope, Type type) {
+        Component component = createComponent(analyzedArtifact.getArtifact(), scope, type);
+        Map<String, List<LicenseInfo>> uniqueLicensesMap = analyzedArtifact.getLicenses()
+                .stream()
+                .filter(licenseInfo -> !SpdxLicenseUtils.isUnknownLicenseId(licenseInfo.getSpdxLicenseId()))
+                .collect(Collectors.groupingBy(LicenseInfo::getSpdxLicenseId));
+        LicenseChoice licenseChoice = new LicenseChoice();
+        licenseChoice.setLicenses(uniqueLicensesMap.keySet().stream().map(spdxLicenseId -> {
+            License license = new License();
+            license.setId(spdxLicenseId);
+            license.setAcknowledgement("concluded");
+            return license;
+        }).toList());
+        component.setLicenses(licenseChoice);
+        Set<Map.Entry<String, List<LicenseInfo>>> entries = uniqueLicensesMap.entrySet();
+
+        for (Map.Entry<String, List<LicenseInfo>> entry : entries) {
+            String spdxLicenseId = entry.getKey();
+            List<LicenseInfo> licenseInfos = entry.getValue()
+                    .stream()
+                    .sorted(Comparator.comparing(LicenseInfo::getSpdxLicenseId))
+                    .toList();
+            addLicenseEvidence(component, licenseInfos);
+            licenseInfos.stream()
+                    .map(licenseInfo -> getNormalizedUrl(licenseInfo.getUrl()))
+                    .forEach(
+                            optionalURI -> optionalURI.ifPresent(
+                                    uri -> addExternalReference(
+                                            component,
+                                            ExternalReference.Type.LICENSE,
+                                            uri.toASCIIString(),
+                                            spdxLicenseId)));
+        }
+        return component;
+    }
+
+    public static Component createComponent(Artifact artifact, Scope scope, Type type) {
         Component component = new Component();
         setCoordinates(component, artifact);
         component.setScope(scope);
@@ -478,7 +590,7 @@ public class SbomUtils {
         }
     }
 
-    private static void updateDependencyRef(Dependency dependency, String oldRef, String newRef) {
+    public static void updateDependencyRef(Dependency dependency, String oldRef, String newRef) {
         // If the current dependency has the oldRef, replace it with newRef
         if (dependency.getRef().equals(oldRef)) {
             Dependency updatedDependency = new Dependency(newRef);
@@ -502,6 +614,28 @@ public class SbomUtils {
                 updateDependencyRef(subProvide, oldRef, newRef);
             }
         }
+    }
+
+    public static Dependency updateDependencyRef(Dependency dependency, String newRef) {
+        // If the current dependency has the oldRef, replace it with newRef
+        Dependency updatedDependency = new Dependency(newRef);
+        updatedDependency.setDependencies(dependency.getDependencies());
+        updatedDependency.setProvides(dependency.getProvides());
+
+        // Recursively update sub-dependencies
+        if (updatedDependency.getDependencies() != null) {
+            for (Dependency subDependency : updatedDependency.getDependencies()) {
+                updateDependencyRef(subDependency, newRef);
+            }
+        }
+
+        // Recursively update provided dependencies
+        if (updatedDependency.getProvides() != null) {
+            for (Dependency subProvide : updatedDependency.getProvides()) {
+                updateDependencyRef(subProvide, newRef);
+            }
+        }
+        return updatedDependency;
     }
 
     public static ToolInformation createToolInformation(String version) {
@@ -567,7 +701,7 @@ public class SbomUtils {
     }
 
     public static void addHashIfMissing(Component component, String hash, String algorithmSpec) {
-        addHashIfMissing(component, hash, Hash.Algorithm.fromSpec(algorithmSpec));
+        addHashIfMissing(component, hash, Algorithm.fromSpec(algorithmSpec));
     }
 
     public static void addProperty(Component component, String key, String value) {
@@ -583,6 +717,19 @@ public class SbomUtils {
         component.setProperties(properties);
     }
 
+    public static void addProperty(Metadata metadata, String key, String value) {
+        log.debug("addProperty {}: {}", key, value);
+        List<Property> properties = new ArrayList<>();
+        if (metadata.getProperties() != null) {
+            properties.addAll(metadata.getProperties());
+        }
+        Property property = new Property();
+        property.setName(key);
+        property.setValue(value != null ? value : "");
+        properties.add(property);
+        metadata.setProperties(properties);
+    }
+
     /**
      * <p>
      * Adds a property of a given name in case it's not already there.
@@ -593,16 +740,37 @@ public class SbomUtils {
      * @param value The value of the property.
      */
     public static void addPropertyIfMissing(Component component, String property, String value) {
-        if (!hasProperty(component, property)) {
+        if (component == null) {
+            return;
+        }
+        Optional<Property> p = findPropertyWithName(property, component.getProperties());
+        if (p.isEmpty()) {
             log.info("Adding {} property with value: {}", property, value);
             addProperty(component, property, value);
         } else {
-            // FIXME: 'Optional.get()' without 'isPresent()' check
-            log.debug(
-                    "Property {} already exist, value: {}",
-                    property,
-                    findPropertyWithNameInComponent(property, component).get().getValue()); // NOSONAR It's checked
-                                                                                            // above
+            log.debug("Property {} already exist, value: {}", property, p.get().getValue());
+        }
+    }
+
+    /**
+     * <p>
+     * Adds a property of a given name in case it's not already there.
+     * </p>
+     *
+     * @param metadata The {@link Metadata} to add the property to.
+     * @param property The name of the property.
+     * @param value The value of the property.
+     */
+    public static void addPropertyIfMissing(Metadata metadata, String property, String value) {
+        if (metadata == null) {
+            return;
+        }
+        Optional<Property> p = findPropertyWithName(property, metadata.getProperties());
+        if (p.isEmpty()) {
+            log.info("Adding {} property with value: {}", property, value);
+            addProperty(metadata, property, value);
+        } else {
+            log.debug("Property {} already exist, value: {}", property, p.get().getValue());
         }
     }
 
@@ -625,18 +793,20 @@ public class SbomUtils {
                 && component.getProperties().stream().anyMatch(c -> c.getName().equalsIgnoreCase(property));
     }
 
-    // FIXME: hasProperty() uses equalsIgnoreCase(), but findPropertyWithNameInComponent() uses equals()
-    // TODO: Optimize so that addPropertyIfMissing() is not filtering twice by using, e.g., Optional.orElse()
     public static Optional<Property> findPropertyWithNameInComponent(String propertyName, Component component) {
         if (component == null) {
             return Optional.empty();
         }
 
-        if (component.getProperties() == null || component.getProperties().isEmpty()) {
+        return findPropertyWithName(propertyName, component.getProperties());
+    }
+
+    public static Optional<Property> findPropertyWithName(String propertyName, List<Property> properties) {
+        if (properties == null || properties.isEmpty()) {
             return Optional.empty();
         }
 
-        return component.getProperties().stream().filter(c -> c.getName().equals(propertyName)).findFirst();
+        return properties.stream().filter(p -> p.getName().equalsIgnoreCase(propertyName)).findFirst();
     }
 
     public static boolean hasExternalReference(Component c, ExternalReference.Type type) {
@@ -669,31 +839,33 @@ public class SbomUtils {
     }
 
     public static void addExternalReference(Component c, ExternalReference.Type type, String url, String comment) {
-        if (!Strings.isEmpty(url)) {
-            List<ExternalReference> externalRefs = new ArrayList<>();
-            if (c.getExternalReferences() != null) {
-                externalRefs.addAll(c.getExternalReferences());
-            }
-
-            ExternalReference reference = Optional.of(externalRefs)
-                    .stream()
-                    .flatMap(Collection::stream)
-                    .filter(ref -> ref.getType().equals(type))
-                    .filter(ref -> Objects.equals(ref.getComment(), comment))
-                    .findFirst()
-                    .orElse(null);
-
-            if (reference == null) {
-                reference = new ExternalReference();
-                reference.setType(type);
-                externalRefs.add(reference);
-            }
-
-            reference.setUrl(url);
-            reference.setComment(comment);
-
-            c.setExternalReferences(externalRefs);
+        if (Strings.isEmpty(url)) {
+            return;
         }
+
+        List<ExternalReference> externalRefs = new ArrayList<>();
+        if (c.getExternalReferences() != null) {
+            externalRefs.addAll(c.getExternalReferences());
+        }
+
+        ExternalReference reference = Optional.of(externalRefs)
+                .stream()
+                .flatMap(Collection::stream)
+                .filter(ref -> ref.getType().equals(type))
+                .filter(ref -> Objects.equals(ref.getComment(), comment))
+                .findFirst()
+                .orElse(null);
+
+        if (reference == null) {
+            reference = new ExternalReference();
+            reference.setType(type);
+            externalRefs.add(reference);
+        }
+
+        reference.setUrl(url);
+        reference.setComment(comment);
+
+        c.setExternalReferences(externalRefs);
     }
 
     public static void addPedigreeCommit(Component c, String url, String uid) {
@@ -729,13 +901,13 @@ public class SbomUtils {
     }
 
     public static void setPublisher(Component c) {
-        c.setPublisher(Constants.PUBLISHER);
+        c.setPublisher(PUBLISHER);
     }
 
     public static void setSupplier(Component c) {
         OrganizationalEntity org = new OrganizationalEntity();
-        org.setName(Constants.SUPPLIER_NAME);
-        org.setUrls(List.of(Constants.SUPPLIER_URL));
+        org.setName(SUPPLIER_NAME);
+        org.setUrls(List.of(SUPPLIER_URL));
         c.setSupplier(org);
     }
 
@@ -756,7 +928,7 @@ public class SbomUtils {
             dist.setType(ExternalReference.Type.DISTRIBUTION);
             externalRefs.add(dist);
         }
-        dist.setUrl(Constants.MRRC_URL);
+        dist.setUrl(MRRC_URL);
         c.setExternalReferences(externalRefs);
     }
 
@@ -808,12 +980,13 @@ public class SbomUtils {
         if (bom == null || bom.getComponents() == null || bom.getComponents().isEmpty()) {
             return List.of();
         }
-
         Component mainComponent = bom.getComponents().get(0);
-        Property n = findPropertyWithNameInComponent("sbomer:image:labels:com.redhat.component", mainComponent)
+        Property n = findPropertyWithNameInComponent(Constants.CONTAINER_PROPERTY_IMAGE_LABEL_COMPONENT, mainComponent)
                 .orElse(null);
-        Property v = findPropertyWithNameInComponent("sbomer:image:labels:version", mainComponent).orElse(null);
-        Property r = findPropertyWithNameInComponent("sbomer:image:labels:release", mainComponent).orElse(null);
+        Property v = findPropertyWithNameInComponent(Constants.CONTAINER_PROPERTY_IMAGE_LABEL_VERSION, mainComponent)
+                .orElse(null);
+        Property r = findPropertyWithNameInComponent(Constants.CONTAINER_PROPERTY_IMAGE_LABEL_RELEASE, mainComponent)
+                .orElse(null);
 
         if (n != null && v != null && r != null) {
             return List.of(n.getValue(), v.getValue(), r.getValue());
@@ -997,9 +1170,9 @@ public class SbomUtils {
      */
     public static void removeErrataProperties(Bom bom) {
         if (bom != null && bom.getMetadata() != null && bom.getMetadata().getComponent() != null) {
-            removeProperty(bom.getMetadata().getComponent(), Constants.PROPERTY_ERRATA_PRODUCT_NAME);
-            removeProperty(bom.getMetadata().getComponent(), Constants.PROPERTY_ERRATA_PRODUCT_VERSION);
-            removeProperty(bom.getMetadata().getComponent(), Constants.PROPERTY_ERRATA_PRODUCT_VARIANT);
+            removeProperty(bom.getMetadata().getComponent(), PROPERTY_ERRATA_PRODUCT_NAME);
+            removeProperty(bom.getMetadata().getComponent(), PROPERTY_ERRATA_PRODUCT_VERSION);
+            removeProperty(bom.getMetadata().getComponent(), PROPERTY_ERRATA_PRODUCT_VARIANT);
         }
     }
 
@@ -1068,6 +1241,42 @@ public class SbomUtils {
         }
     }
 
+    public static void addMissingContainerHash(Bom bom) {
+        if (bom.getComponents() == null || bom.getComponents().isEmpty()) {
+            return;
+        }
+
+        addMissingContainerHash(bom.getComponents().get(0));
+    }
+
+    public static void addMissingContainerHash(Component component) {
+        if (component.getType() != Component.Type.CONTAINER) {
+            return;
+        }
+
+        String[] versionTokens = component.getVersion().split(":");
+        if (versionTokens.length < 2) {
+            return;
+        }
+        Map<String, Hash.Algorithm> hashMap = Map.of(
+                "md5",
+                Hash.Algorithm.MD5,
+                "sha1",
+                Hash.Algorithm.SHA1,
+                "sha256",
+                Hash.Algorithm.SHA_256,
+                "sha384",
+                Hash.Algorithm.SHA_384,
+                "sha512",
+                Hash.Algorithm.SHA_512);
+
+        hashMap.forEach((prefix, algorithm) -> {
+            if (versionTokens[0].equalsIgnoreCase(prefix)) {
+                addHashIfMissing(component, versionTokens[1], algorithm);
+            }
+        });
+    }
+
     public static void addMissingMetadataSupplier(Bom bom) {
         if (bom == null) {
             return;
@@ -1082,8 +1291,8 @@ public class SbomUtils {
 
         if (metadata.getSupplier() == null) {
             OrganizationalEntity org = new OrganizationalEntity();
-            org.setName(Constants.SUPPLIER_NAME);
-            org.setUrls(List.of(Constants.SUPPLIER_URL));
+            org.setName(SUPPLIER_NAME);
+            org.setUrls(List.of(SUPPLIER_URL));
             metadata.setSupplier(org);
         }
     }

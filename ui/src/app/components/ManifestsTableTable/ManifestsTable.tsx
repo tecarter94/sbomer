@@ -22,11 +22,12 @@ import {
 import { Caption, Table, Tbody, Td, Th, Thead, Tr } from '@patternfly/react-table';
 import React from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { useSearchParam } from 'react-use';
 import { ErrorSection } from '../Sections/ErrorSection/ErrorSection';
 import { useManifests } from './useSboms';
 import { openInNewTab } from '@app/utils/openInNewTab';
-import { QueryType } from '@app/types';
+import { ManifestsQueryType } from '@app/types';
+import { useManifestsFilters } from './useManifestsFilters';
+import { NoResultsSection } from '../Sections/NoResultsSection/NoResultSection';
 
 const columnNames = {
   id: 'ID',
@@ -39,64 +40,41 @@ const columnNames = {
 export const ManifestsTable = () => {
 
   const navigate = useNavigate();
-  const paramPage = useSearchParam('page') || 1;
-  const paramPageSize = useSearchParam('pageSize') || 10;
 
+  const { queryType, queryValue, pageIndex, pageSize, setFilters } = useManifestsFilters();
 
+  const [searchBarVisible, setSearchBarVisible] = React.useState<boolean>(queryType != ManifestsQueryType.NoFilter);
+  const [searchBarValue, setSearchBarValue] = React.useState<string>(queryValue);
 
-  const [searchBarValue, setSearchBarValue] = React.useState<string>('');
-  const [searchBarVisible, setSearchBarVisible] = React.useState<boolean>(false);
+  const [selectIsOpen, setSelectIsOpen] = React.useState<boolean>(false);
+  const [selectValue, setSelectValue] = React.useState<ManifestsQueryType>(queryType)
 
-  const [selectIsOpen, setSelectIsOpen] = React.useState(false);
-  const [selectedQueryType, setSelectedQueryType] = React.useState<QueryType>(QueryType.NoFilter);
-
-
-  const [isButtonVisible, setButtonVisible] = React.useState<boolean>(false);
+  const [isButtonVisible, setButtonVisible] = React.useState<boolean>(queryType != ManifestsQueryType.NoFilter);
 
   // getting the data and applying the filters sent to the backend here
-  const [{ pageIndex, pageSize, value, loading, total, error }, { setPageIndex, setPageSize, setQueryType, setQuery }] = useManifests(
-    +paramPage - 1,
-    +paramPageSize,
-  );
-
+  const [{ value, loading, total, error }] = useManifests();
 
   const onSetPage = (_event: React.MouseEvent | React.KeyboardEvent | MouseEvent, newPage: number) => {
-    setPageIndex(newPage - 1);
-    navigate({ search: `?page=${newPage}&pageSize=${pageSize}` });
+    setFilters(queryType, queryValue, newPage, pageSize)
   };
 
   const onPerPageSelect = (_event: React.MouseEvent | React.KeyboardEvent | MouseEvent, newPerPage: number) => {
-    setPageSize(newPerPage);
-    setPageIndex(0);
-    navigate({ search: `?page=1&pageSize=${newPerPage}` });
+    setFilters(queryType, queryValue, pageIndex, newPerPage)
   };
-
-  if (error) {
-    return <ErrorSection />;
-  }
-
-  if (loading) {
-    return <Skeleton screenreaderText="Loading data..." />;
-  }
-
-  if (!value) {
-    return null;
-  }
-
 
   const onToggleClick = () => {
     setSelectIsOpen(!selectIsOpen);
   };
 
   const onSelect = (_event: React.MouseEvent<Element, MouseEvent> | undefined, value: string | number | undefined) => {
-    setSelectedQueryType(value as QueryType);
+    setSelectValue(value as ManifestsQueryType)
     setSelectIsOpen(false);
     switch (value) {
-      case QueryType.NoFilter:
+      case ManifestsQueryType.NoFilter:
         setSearchBarVisible(false);
-        setQueryType(QueryType.NoFilter);
-        setQuery('');
         setButtonVisible(false);
+        setSearchBarValue('')
+        setFilters(ManifestsQueryType.NoFilter, '', pageIndex, pageSize)
         break;
       default:
         setSearchBarVisible(true);
@@ -106,9 +84,7 @@ export const ManifestsTable = () => {
   };
 
   const onSearchCall = () => {
-    setQueryType(selectedQueryType);
-    setQuery(searchBarValue);
-    setPageIndex(0);
+    setFilters(selectValue, searchBarValue, 1, pageSize)
   }
 
   const toggle = (toggleRef: React.Ref<MenuToggleElement>) => (
@@ -122,14 +98,14 @@ export const ManifestsTable = () => {
         } as React.CSSProperties
       }
     >
-      {selectedQueryType}
+      {selectValue}
     </MenuToggle>
   );
 
   const select = <Select
     id="single-select"
     isOpen={selectIsOpen}
-    selected={selectedQueryType}
+    selected={selectValue as ManifestsQueryType}
     onSelect={onSelect}
     onOpenChange={(isOpen) => setSelectIsOpen(isOpen)}
     toggle={toggle}
@@ -137,21 +113,31 @@ export const ManifestsTable = () => {
   >
     <SelectList>
       <SelectGroup>
-        <SelectOption value={QueryType.NoFilter}>{QueryType.NoFilter}</SelectOption>
+        <SelectOption value={ManifestsQueryType.NoFilter}>{ManifestsQueryType.NoFilter}</SelectOption>
       </SelectGroup>
       <SelectGroup>
-        <SelectOption value={QueryType.Purl}>{QueryType.Purl}</SelectOption>
+        <SelectOption value={ManifestsQueryType.Purl}>{ManifestsQueryType.Purl}</SelectOption>
       </SelectGroup>
     </SelectList>
   </Select>
 
 
+  const onChange = (value: string) => {
+    setSearchBarValue(value)
+  };
+
   const searchBar = <SearchInput
     placeholder="Enter selected id"
     value={searchBarValue}
-    onChange={(_event, value) => setSearchBarValue(value)}
-    onClear={() => setSearchBarValue('')}
+    onChange={(_event, value) => onChange(value)}
+    onClear={() => onChange('')}
     isAdvancedSearchOpen={!searchBarVisible}
+    onKeyDown={(event: React.KeyboardEvent) => {
+      if (event.key == 'Enter') {
+        onSearchCall();
+      }
+    }
+    }
   />
 
   const searchButton = <Button
@@ -159,82 +145,98 @@ export const ManifestsTable = () => {
     onClick={() => onSearchCall()}>Search</Button>
 
 
-  return (
-    <>
-      <Toolbar>
-        <ToolbarContent>
-          <ToolbarItem>
-            {select}
-          </ToolbarItem>
-          <ToolbarItem>
-            {searchBarVisible && searchBar}
-          </ToolbarItem>
-          <ToolbarItem>
-            {isButtonVisible && searchButton}
-          </ToolbarItem>
-        </ToolbarContent>
-      </Toolbar>
-      <Table aria-label="Manifests table" variant="compact">
-        <Caption>Latest manifests</Caption>
-        <Thead>
-          <Tr>
-            <Th>{columnNames.id}</Th>
-            <Th>{columnNames.type}</Th>
-            <Th>{columnNames.identifier}</Th>
-            <Th>{columnNames.creationTime}</Th>
-          </Tr>
-        </Thead>
-        <Tbody>
-          {value.map((manifest) => (
-            <Tr
-              key={manifest.id}
-              isClickable
-              onRowClick={() => navigate(`/manifests/${manifest.id}`)}
-              onAuxClick={() => openInNewTab(`/manifests/${manifest.id}`)}
-            >
-              <Td dataLabel={columnNames.id}>
-                <Link to={`/manifests/${manifest.id}`}>
-                  <pre>{manifest.id}</pre>
-                </Link>
-              </Td>
-              <Td dataLabel={columnNames.type}>
-                <Label style={{ cursor: 'pointer' }} color="purple">
-                  {typeToDescription(manifest.generation)}
-                </Label>
-              </Td>
-              <Td dataLabel={columnNames.identifier}>
-                <Tooltip
-                  isContentLeftAligned={true}
-                  content={
+  const table = <>
+    <Table aria-label="Manifests table" variant="compact">
+      <Caption>Latest manifests</Caption>
+      <Thead>
+        <Tr>
+          <Th>{columnNames.id}</Th>
+          <Th>{columnNames.type}</Th>
+          <Th>{columnNames.identifier}</Th>
+          <Th>{columnNames.creationTime}</Th>
+        </Tr>
+      </Thead>
+      <Tbody>
+        {value && value.map((manifest) => (
+          <Tr
+            key={manifest.id}
+            isClickable
+            style={{ cursor: 'auto' }}
+          >
+            <Td dataLabel={columnNames.id}>
+              <Link to={`/manifests/${manifest.id}`}>
+                <pre>{manifest.id}</pre>
+              </Link>
+            </Td>
+            <Td dataLabel={columnNames.type}>
+              <Label color="purple">
+                {typeToDescription(manifest.generation)}
+              </Label>
+            </Td>
+            <Td dataLabel={columnNames.identifier}>
+              <Tooltip
+                isContentLeftAligned={true}
+                content={
+                  <div>
                     <div>
-                      <div>
-                        <strong>Purl</strong>
-                      </div>
-                      <div>{manifest.rootPurl}</div>
+                      <strong>Purl</strong>
                     </div>
-                  }
-                >
-                  <span className="pf-v5-c-timestamp pf-m-help-text">{manifest.identifier}</span>
-                </Tooltip>
-              </Td>
-              <Td dataLabel={columnNames.creationTime}>
-                <Timestamp date={manifest.creationTime} tooltip={{ variant: TimestampTooltipVariant.default }}>
-                  {timestampToHumanReadable(Date.now() - manifest.creationTime.getTime(), false, 'ago')}
-                </Timestamp>
-              </Td>
-            </Tr>
-          ))}
-        </Tbody>
-      </Table>
-      <Pagination
-        itemCount={total}
-        widgetId="manifests-table-pagination"
-        perPage={pageSize}
-        page={pageIndex + 1}
-        variant={PaginationVariant.bottom}
-        onSetPage={onSetPage}
-        onPerPageSelect={onPerPageSelect}
-      />
-    </>
-  );
+                    <div>{manifest.rootPurl}</div>
+                  </div>
+                }
+              >
+                <span className="pf-v5-c-timestamp pf-m-help-text">{manifest.identifier}</span>
+              </Tooltip>
+            </Td>
+            <Td dataLabel={columnNames.creationTime}>
+              <Timestamp date={manifest.creationTime} tooltip={{ variant: TimestampTooltipVariant.default }}>
+                {timestampToHumanReadable(Date.now() - manifest.creationTime.getTime(), false, 'ago')}
+              </Timestamp>
+            </Td>
+          </Tr>
+        ))}
+      </Tbody>
+    </Table>
+    <Pagination
+      itemCount={total}
+      widgetId="manifests-table-pagination"
+      perPage={pageSize}
+      page={pageIndex}
+      variant={PaginationVariant.bottom}
+      onSetPage={onSetPage}
+      onPerPageSelect={onPerPageSelect}
+    />
+  </>
+  const noResults = <NoResultsSection />
+  const loadingSkeleton = <Skeleton screenreaderText="Loading data..." />;
+  const errorSection = <ErrorSection />
+
+  const filtersBar = <>
+    <Toolbar>
+      <ToolbarContent>
+        <ToolbarItem>
+          {select}
+        </ToolbarItem>
+        <ToolbarItem>
+          {searchBarVisible && searchBar}
+        </ToolbarItem>
+        <ToolbarItem>
+          {isButtonVisible && searchButton}
+        </ToolbarItem>
+      </ToolbarContent>
+    </Toolbar>
+  </>
+
+  const tableArea =
+    error ? errorSection :
+      loading ? loadingSkeleton :
+        total === 0 ? noResults : table;
+
+
+  return <>
+    {filtersBar}
+    {tableArea}
+  </>
+
+
 };

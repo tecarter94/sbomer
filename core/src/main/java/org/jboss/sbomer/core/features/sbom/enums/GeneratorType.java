@@ -30,7 +30,8 @@ public enum GeneratorType {
     MAVEN_DOMINO, @JsonProperty("gradle-cyclonedx")
     GRADLE_CYCLONEDX, @JsonProperty("npm-cyclonedx")
     NPM_CYCLONEDX, @JsonProperty("yarn-cyclonedx")
-    YARN_CYCLONEDX, @JsonProperty("cyclonedx-operation")
+    YARN_CYCLONEDX, @JsonProperty("sbt-cyclonedx")
+    SBT_CYCLONEDX, @JsonProperty("cyclonedx-operation")
     CYCLONEDX_OPERATION, @JsonProperty("image-syft")
     IMAGE_SYFT
 }

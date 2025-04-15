@@ -17,50 +17,64 @@
 ///
 
 import { DefaultSbomerApi } from '@app/api/DefaultSbomerApi';
+import { RequestsQueryType } from '@app/types';
 import { useCallback, useState } from 'react';
 import useAsyncRetry from 'react-use/lib/useAsyncRetry';
+import { useRequestEventsFilters } from './useRequestEventsFilters';
 
-export function useRequestEvents(initialPage: number, intialPageSize: number) {
+export function useRequestEvents() {
   const sbomerApi = DefaultSbomerApi.getInstance();
   const [total, setTotal] = useState(0);
-  const [pageIndex, setPageIndex] = useState(initialPage || 0);
-  const [pageSize, setPageSize] = useState(intialPageSize || 10);
+
+  const { queryType, queryValue, pageIndex, pageSize } = useRequestEventsFilters();
 
   const getRequestEvents = useCallback(
-    async ({ pageSize, pageIndex }: { pageSize: number; pageIndex: number }) => {
+    async ({
+      pageSize,
+      pageIndex,
+    }: {
+      pageSize: number;
+      pageIndex: number;
+      queryType: RequestsQueryType;
+      queryValue: string;
+    }) => {
       try {
-        return await sbomerApi.getRequestEvents({ pageSize, pageIndex });
+        const pageIndexOffsetted = pageIndex - 1;
+        const response = await sbomerApi.getRequestEvents(
+          { pageSize, pageIndex: pageIndexOffsetted },
+          queryType,
+          queryValue,
+        );
+        return response;
       } catch (e) {
         return Promise.reject(e);
       }
     },
-    [pageIndex, pageSize],
+    [pageIndex, pageSize, queryType, queryValue],
   );
 
   const { loading, value, error, retry } = useAsyncRetry(
     () =>
       getRequestEvents({
-        pageSize: pageSize,
-        pageIndex: pageIndex,
+        pageSize: +pageSize,
+        pageIndex: +pageIndex,
+        queryType: queryType,
+        queryValue: queryValue,
       }).then((data) => {
         setTotal(data.total);
         return data.data;
       }),
-    [pageIndex, pageSize],
+    [pageIndex, pageSize, queryType, queryValue],
   );
 
   return [
     {
-      pageIndex,
-      pageSize,
       total,
       value,
       loading,
       error,
     },
     {
-      setPageIndex,
-      setPageSize,
       retry,
     },
   ] as const;

@@ -17,6 +17,10 @@
  */
 package org.jboss.sbomer.service.feature.sbom.errata.event.release;
 
+import static org.jboss.sbomer.core.features.sbom.utils.SbomUtils.addMissingMetadataSupplier;
+import static org.jboss.sbomer.core.features.sbom.utils.SbomUtils.addMissingSerialNumber;
+import static org.jboss.sbomer.core.features.sbom.utils.SbomUtils.addPropertyIfMissing;
+
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Comparator;
@@ -42,6 +46,7 @@ import org.jboss.sbomer.core.dto.v1beta1.V1Beta1GenerationRecord;
 import org.jboss.sbomer.core.dto.v1beta1.V1Beta1RequestManifestRecord;
 import org.jboss.sbomer.core.dto.v1beta1.V1Beta1RequestRecord;
 import org.jboss.sbomer.core.errors.ApplicationException;
+import org.jboss.sbomer.core.features.sbom.Constants;
 import org.jboss.sbomer.core.features.sbom.enums.GenerationRequestType;
 import org.jboss.sbomer.core.features.sbom.enums.GenerationResult;
 import org.jboss.sbomer.core.features.sbom.enums.RequestEventStatus;
@@ -182,21 +187,32 @@ public class ReleaseStandardAdvisoryEventsListener extends AbstractEventsListene
             Map<String, List<ErrataCDNRepoNormalized>> generationToCDNs = new HashMap<>();
 
             for (BuildItem buildItem : buildItems) {
-                // FIXME: 'Optional.get()' without 'isPresent()' check
-                Component nvrRootComponent = createRootComponentForRPMBuildItem(
-                        buildItem,
-                        nvrToBuildGeneration.get(buildItem.getNvr()),
-                        advisoryManifestsRecord,
-                        erratum.getDetails().get().getProduct().getShortName(),
-                        generationToCDNs);
+                V1Beta1GenerationRecord buildGeneration = nvrToBuildGeneration.get(buildItem.getNvr());
+                if (buildGeneration != null) {
+                    // It could happen that not all the builds attached to the advisory have a generation done in SBOMer
+                    // (the builds which SBOMer is not able to manifest)
+                    // FIXME: 'Optional.get()' without 'isPresent()' check
+                    Component nvrRootComponent = createRootComponentForRPMBuildItem(
+                            buildItem,
+                            buildGeneration,
+                            advisoryManifestsRecord,
+                            erratum.getDetails().get().getProduct().getShortName(),
+                            generationToCDNs);
 
-                // Add the component to the release manifest components and add the purl to the "provides" list
-                productVersionBom.addComponent(nvrRootComponent);
-                productVersionBom.getDependencies().get(0).addProvides(new Dependency(nvrRootComponent.getPurl()));
+                    // Add the component to the release manifest components and add the purl to the "provides" list
+                    productVersionBom.addComponent(nvrRootComponent);
+                    productVersionBom.getDependencies().get(0).addProvides(new Dependency(nvrRootComponent.getPurl()));
+                }
             }
 
-            SbomUtils.addMissingMetadataSupplier(productVersionBom);
-            SbomUtils.addMissingSerialNumber(productVersionBom);
+            // Add the AdvisoryId property
+            addPropertyIfMissing(
+                    productVersionBom.getMetadata(),
+                    Constants.CONTAINER_PROPERTY_ADVISORY_ID,
+                    String.valueOf(erratum.getDetails().get().getId()));
+
+            addMissingMetadataSupplier(productVersionBom);
+            addMissingSerialNumber(productVersionBom);
 
             SbomGenerationRequest releaseGeneration = releaseGenerations.get(productVersion.getName());
             Sbom sbom = saveReleaseManifestForRPMGeneration(
@@ -245,19 +261,30 @@ public class ReleaseStandardAdvisoryEventsListener extends AbstractEventsListene
             Map<String, List<RepositoryCoordinates>> generationToRepositories = new HashMap<>();
 
             for (BuildItem buildItem : buildItems) {
-                Component nvrRootComponent = createRootComponentForDockerBuildItem(
-                        buildItem.getNvr(),
-                        nvrToBuildGeneration.get(buildItem.getNvr()),
-                        advisoryManifestsRecord,
-                        generationToRepositories);
+                V1Beta1GenerationRecord buildGeneration = nvrToBuildGeneration.get(buildItem.getNvr());
+                if (buildGeneration != null) {
+                    // It could happen that not all the builds attached to the advisory have a generation done in SBOMer
+                    // (the builds which SBOMer is not able to manifest like build#3572808)
+                    Component nvrRootComponent = createRootComponentForDockerBuildItem(
+                            buildItem.getNvr(),
+                            buildGeneration,
+                            advisoryManifestsRecord,
+                            generationToRepositories);
 
-                // Add the component to the release manifest components and add the purl to the "provides" list
-                productVersionBom.addComponent(nvrRootComponent);
-                productVersionBom.getDependencies().get(0).addProvides(new Dependency(nvrRootComponent.getPurl()));
+                    // Add the component to the release manifest components and add the purl to the "provides" list
+                    productVersionBom.addComponent(nvrRootComponent);
+                    productVersionBom.getDependencies().get(0).addProvides(new Dependency(nvrRootComponent.getPurl()));
+                }
             }
 
-            SbomUtils.addMissingMetadataSupplier(productVersionBom);
-            SbomUtils.addMissingSerialNumber(productVersionBom);
+            // Add the AdvisoryId property
+            addPropertyIfMissing(
+                    productVersionBom.getMetadata(),
+                    Constants.CONTAINER_PROPERTY_ADVISORY_ID,
+                    String.valueOf(erratum.getDetails().get().getId()));
+
+            addMissingMetadataSupplier(productVersionBom);
+            addMissingSerialNumber(productVersionBom);
 
             SbomGenerationRequest releaseGeneration = releaseGenerations.get(productVersion.getName());
             Sbom sbom = saveReleaseManifestForDockerGeneration(
@@ -447,8 +474,6 @@ public class ReleaseStandardAdvisoryEventsListener extends AbstractEventsListene
                         .filter(manifest -> manifest.generation().id().equals(generationId))
                         .toList();
 
-                Map<String, String> originalToRebuiltPurl = new HashMap<>();
-
                 for (V1Beta1RequestManifestRecord buildManifestRecord : buildManifests) {
                     log.debug(
                             "Updating build manifest '{}' for release event {}...",
@@ -458,6 +483,12 @@ public class ReleaseStandardAdvisoryEventsListener extends AbstractEventsListene
                     Sbom buildManifest = sbomService.get(buildManifestRecord.id());
                     Bom manifestBom = SbomUtils.fromJsonNode(buildManifest.getSbom());
                     SbomUtils.addMissingMetadataSupplier(manifestBom);
+
+                    // Add the AdvisoryId property
+                    addPropertyIfMissing(
+                            manifestBom.getMetadata(),
+                            Constants.CONTAINER_PROPERTY_ADVISORY_ID,
+                            String.valueOf(erratum.getDetails().get().getId()));
 
                     // For each component, I need to find the matching CDNs repo, selecting the longest one to update
                     // the purl.
@@ -469,10 +500,10 @@ public class ReleaseStandardAdvisoryEventsListener extends AbstractEventsListene
                             ? manifestBom.getMetadata().getComponent()
                             : null;
                     if (metadataComponent != null) {
-                        adjustComponent(metadataComponent, generationCDNs, manifestArches, originalToRebuiltPurl);
+                        adjustComponent(metadataComponent, generationCDNs, manifestArches);
                     }
                     for (Component component : manifestBom.getComponents()) {
-                        adjustComponent(component, generationCDNs, manifestArches, originalToRebuiltPurl);
+                        adjustComponent(component, generationCDNs, manifestArches);
                     }
 
                     // 2.7 - Update the original Sbom
@@ -578,20 +609,19 @@ public class ReleaseStandardAdvisoryEventsListener extends AbstractEventsListene
                     buildManifest.setRootPurl(rebuiltPurl);
                     log.debug("Updated manifest '{}' to rootPurl '{}'", buildManifestRecord.id(), rebuiltPurl);
 
+                    addPropertyIfMissing(
+                            manifestBom.getMetadata(),
+                            Constants.CONTAINER_PROPERTY_ADVISORY_ID,
+                            String.valueOf(erratum.getDetails().get().getId()));
+
                     if (manifestBom.getMetadata() != null && manifestBom.getMetadata().getComponent() != null) {
+
                         manifestBom.getMetadata().getComponent().setPurl(rebuiltPurl);
-                        if (manifestBom.getMetadata().getComponent().getDescription() != null
-                                && manifestBom.getMetadata()
-                                        .getComponent()
-                                        .getDescription()
-                                        .contains(buildManifest.getRootPurl())) {
+                        String desc = manifestBom.getMetadata().getComponent().getDescription();
+                        if (desc != null && desc.contains(buildManifest.getRootPurl())) {
                             manifestBom.getMetadata()
                                     .getComponent()
-                                    .setDescription(
-                                            manifestBom.getMetadata()
-                                                    .getComponent()
-                                                    .getDescription()
-                                                    .replace(buildManifest.getRootPurl(), rebuiltPurl));
+                                    .setDescription(desc.replace(buildManifest.getRootPurl(), rebuiltPurl));
                         }
                     }
                     if (manifestBom.getComponents() != null && !manifestBom.getComponents().isEmpty()) {
@@ -769,17 +799,18 @@ public class ReleaseStandardAdvisoryEventsListener extends AbstractEventsListene
     private void adjustComponent(
             Component component,
             Collection<ErrataCDNRepoNormalized> generationCDNs,
-            Set<String> manifestArches,
-            Map<String, String> originalToRebuiltPurl) {
+            Set<String> manifestArches) {
 
         Set<String> evidencePurls = AdvisoryEventUtils.createPurls(component.getPurl(), generationCDNs, manifestArches);
         log.debug("Calculated evidence purls: {}", evidencePurls);
         String preferredRebuiltPurl = evidencePurls.stream().max(Comparator.comparingInt(String::length)).orElse(null);
         log.debug("Preferred rebuilt purl: {}", preferredRebuiltPurl);
-        originalToRebuiltPurl.put(component.getPurl(), preferredRebuiltPurl);
-
-        component.setPurl(preferredRebuiltPurl);
-        SbomUtils.setEvidenceIdentities(component, evidencePurls, Field.PURL);
+        // The preferredRebuiltPurl is null if the component.getPurl() is not valid
+        // or it does not contain any "arch" qualifier
+        if (preferredRebuiltPurl != null) {
+            component.setPurl(preferredRebuiltPurl);
+            SbomUtils.setEvidenceIdentities(component, evidencePurls, Field.PURL);
+        }
     }
 
     private V1Beta1RequestManifestRecord findImageIndexManifest(

@@ -158,6 +158,12 @@ public class ReleaseTextOnlyAdvisoryEventsListener extends AbstractEventsListene
             productVersionBom.getDependencies().get(0).addProvides(new Dependency(sbomRootComponent.getPurl()));
         }
 
+        // Add the AdvisoryId property
+        SbomUtils.addPropertyIfMissing(
+                productVersionBom.getMetadata(),
+                Constants.CONTAINER_PROPERTY_ADVISORY_ID,
+                String.valueOf(erratum.getDetails().get().getId()));
+
         SbomUtils.addMissingMetadataSupplier(productVersionBom);
         SbomUtils.addMissingSerialNumber(productVersionBom);
 
@@ -282,6 +288,12 @@ public class ReleaseTextOnlyAdvisoryEventsListener extends AbstractEventsListene
                 Sbom buildManifest = sbomService.get(sbom.getId());
                 Bom manifestBom = SbomUtils.fromJsonNode(buildManifest.getSbom());
                 SbomUtils.addMissingMetadataSupplier(manifestBom);
+
+                // Add the AdvisoryId property
+                SbomUtils.addPropertyIfMissing(
+                        manifestBom.getMetadata(),
+                        Constants.CONTAINER_PROPERTY_ADVISORY_ID,
+                        String.valueOf(erratum.getDetails().get().getId()));
 
                 Component metadataComponent = manifestBom.getMetadata() != null
                         ? manifestBom.getMetadata().getComponent()

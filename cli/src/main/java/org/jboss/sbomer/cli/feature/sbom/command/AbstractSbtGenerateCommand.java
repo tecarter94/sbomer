@@ -15,15 +15,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.jboss.sbomer.core.dto;
+package org.jboss.sbomer.cli.feature.sbom.command;
 
-import java.time.Instant;
-import java.util.Map;
+public abstract class AbstractSbtGenerateCommand extends AbstractGenerateCommand {
 
-import org.eclipse.microprofile.openapi.annotations.media.Schema;
-import org.jboss.sbomer.core.features.sbom.config.Config;
-import org.jboss.sbomer.core.features.sbom.enums.GenerationRequestType;
-
-public record BaseSbomGenerationRequestRecord(String id, String identifier,
-        @Schema(implementation = Map.class) Config config, GenerationRequestType type, Instant creationTime) {
 }
